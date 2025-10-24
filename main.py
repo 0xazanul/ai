@@ -1,42 +1,63 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+import asyncio
 from g4f.client import Client
-import asyncio, os, uvicorn
+from g4f.Provider import (
+    Acytoo, Aichatos, Ails, AItianhu, Bard, Bing, ChatBase,
+    ChatForAi, Chatgpt4Online, CodeLinkAva, DeepAi, FreeGpt, FreeNetfly,
+    Gemini, H2o, Koala, Liaobots, Miku, Myshell, Phind, Raycast,
+    Replit, Theb, Vercel, Vitalentum, You, Yqcloud, GPTalk, GptGo, GptGod,
+    Acytoo, Blackbox, DeepInfra, HuggingFace, OpenaiChat, OpenaiChatFree,
+    OpenAssistant, AiAsk, ChatgptNext, ChatHub, FreeGpt35, GptForLove, DuckDuckGo
+)
 
 app = FastAPI()
 client = Client()
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "AI Summarizer API is running 🚀"}
-
-# List of all providers/models to try
+# 🧠 Try these models (some use different internal mappings)
 MODELS = [
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-    "gpt-3.5-turbo",
-    "gemini-pro",
-    "claude-3-opus",
-    "mixtral-8x7b",
-    "phi-3-mini-128k",
+    "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo-free", "llama-3-8b",
+    "blackbox", "mistral-7b", "deepseek-coder", "mythomax", "phi-3-mini"
 ]
 
-async def try_model(model: str, text: str):
-    """Try summarizing with one model; return result or raise exception."""
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a cybersecurity expert. Summarize this vulnerability report clearly and briefly."},
-                {"role": "user", "content": text},
-            ],
-        )
-        summary = response.choices[0].message.content.strip()
-        if summary:
-            return {"model": model, "summary": summary}
-        raise ValueError("Empty response")
-    except Exception as e:
-        raise RuntimeError(f"{model} failed: {e}")
+# ⚙️ All available providers — you can expand this list as needed
+PROVIDERS = [
+    Acytoo, Aichatos, Ails, AItianhu, Bard, Bing, ChatBase,
+    ChatForAi, CodeLinkAva, DeepAi, FreeGpt, FreeNetfly,
+    Gemini, H2o, Koala, Liaobots, Miku, Myshell, Phind,
+    Raycast, Replit, Theb, Vercel, Vitalentum, You, Yqcloud,
+    GPTalk, GptGo, GptGod, Blackbox, DeepInfra, HuggingFace,
+    OpenaiChatFree, OpenAssistant, AiAsk, ChatgptNext, ChatHub,
+    FreeGpt35, GptForLove, DuckDuckGo
+]
+
+# 🚀 Try every model-provider combination and return first success
+async def try_all_models(text: str):
+    async def try_one(provider, model):
+        try:
+            print(f"⚙️ Trying {provider.__name__} with {model}...")
+            response = client.chat.completions.create(
+                model=model,
+                provider=provider,
+                messages=[
+                    {"role": "system", "content": "Summarize the given security vulnerability clearly and briefly."},
+                    {"role": "user", "content": text}
+                ],
+            )
+            summary = response.choices[0].message.content.strip()
+            if summary:
+                print(f"✅ Success with {provider.__name__} / {model}")
+                return f"{provider.__name__} ({model})", summary
+        except Exception as e:
+            print(f"❌ {provider.__name__} / {model} failed: {e}")
+        return None
+
+    tasks = [try_one(provider, model) for provider in PROVIDERS for model in MODELS]
+    for coro in asyncio.as_completed(tasks):
+        result = await coro
+        if result:
+            return result
+    return None, None
 
 @app.post("/summarize")
 async def summarize(request: Request):
@@ -45,27 +66,11 @@ async def summarize(request: Request):
     if not text:
         return JSONResponse({"error": "No text provided"}, status_code=400)
 
-    tasks = [asyncio.create_task(try_model(model, text)) for model in MODELS]
+    provider_model, summary = await try_all_models(text)
+    if not summary:
+        return JSONResponse({"error": "All models/providers failed"}, status_code=500)
 
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
-    # Cancel any remaining unfinished tasks
-    for task in pending:
-        task.cancel()
-
-    for task in done:
-        try:
-            result = task.result()
-            return {
-                "success": True,
-                "model_used": result["model"],
-                "summary": result["summary"],
-            }
-        except Exception as e:
-            continue
-
-    return JSONResponse({"error": "All models failed to respond"}, status_code=500)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    return JSONResponse({
+        "provider": provider_model,
+        "summary": summary
+    })
